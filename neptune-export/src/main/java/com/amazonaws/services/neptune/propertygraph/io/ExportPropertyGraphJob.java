@@ -13,8 +13,10 @@ permissions and limitations under the License.
 package com.amazonaws.services.neptune.propertygraph.io;
 
 import com.amazonaws.services.neptune.cluster.ConcurrencyConfig;
+import com.amazonaws.services.neptune.export.FeatureToggles;
 import com.amazonaws.services.neptune.io.Status;
 import com.amazonaws.services.neptune.io.StatusOutputFormat;
+import com.amazonaws.services.neptune.propertygraph.GremlinFilters;
 import com.amazonaws.services.neptune.propertygraph.RangeConfig;
 import com.amazonaws.services.neptune.propertygraph.RangeFactory;
 import com.amazonaws.services.neptune.propertygraph.schema.*;
@@ -42,21 +44,27 @@ public class ExportPropertyGraphJob {
     private final GraphSchema graphSchema;
     private final GraphTraversalSource g;
     private final RangeConfig rangeConfig;
+    private final GremlinFilters gremlinFilters;
     private final ConcurrencyConfig concurrencyConfig;
     private final PropertyGraphTargetConfig targetConfig;
+    private final FeatureToggles featureToggles;
 
     public ExportPropertyGraphJob(Collection<ExportSpecification> exportSpecifications,
                                   GraphSchema graphSchema,
                                   GraphTraversalSource g,
                                   RangeConfig rangeConfig,
+                                  GremlinFilters gremlinFilters,
                                   ConcurrencyConfig concurrencyConfig,
-                                  PropertyGraphTargetConfig targetConfig) {
+                                  PropertyGraphTargetConfig targetConfig,
+                                  FeatureToggles featureToggles) {
         this.exportSpecifications = exportSpecifications;
         this.graphSchema = graphSchema;
         this.g = g;
         this.rangeConfig = rangeConfig;
+        this.gremlinFilters = gremlinFilters;
         this.concurrencyConfig = concurrencyConfig;
         this.targetConfig = targetConfig;
+        this.featureToggles = featureToggles;
     }
 
     public GraphSchema execute() throws Exception {
@@ -81,7 +89,10 @@ public class ExportPropertyGraphJob {
         for (ExportSpecification labelSpecificExportSpecification : exportSpecification.splitByLabel()) {
             Collection<Future<FileSpecificLabelSchemas>> futures = new ArrayList<>();
             RangeFactory rangeFactory = labelSpecificExportSpecification.createRangeFactory(g, rangeConfig, concurrencyConfig);
-            Status status = new Status(StatusOutputFormat.Description, String.format("%s: %s total", labelSpecificExportSpecification.description(), rangeFactory.numberOfItemsToExport()));
+            Status status = new Status(
+                    StatusOutputFormat.Description,
+                    String.format("%s: %s total", labelSpecificExportSpecification.description(), rangeFactory.numberOfItemsToExport()),
+                    () -> String.format(" [%s GB free space]", targetConfig.freeSpaceInGigabytes()));
 
             String description = String.format("writing %s as %s to %s",
                     labelSpecificExportSpecification.description(),
@@ -89,6 +100,8 @@ public class ExportPropertyGraphJob {
                     targetConfig.output().name());
 
             System.err.println("Started " + description);
+
+            AtomicInteger fileIndex = new AtomicInteger();
 
             Timer.timedActivity(description, (CheckedActivity.Runnable) () -> {
                 ExecutorService taskExecutor = Executors.newFixedThreadPool(rangeFactory.concurrency());
@@ -98,9 +111,10 @@ public class ExportPropertyGraphJob {
                             graphSchema,
                             g,
                             targetConfig,
+                            gremlinFilters,
                             rangeFactory,
                             status,
-                            index,
+                            fileIndex,
                             fileDescriptorCount
                     );
                     futures.add(taskExecutor.submit(exportTask));
@@ -122,7 +136,8 @@ public class ExportPropertyGraphJob {
         }
 
         MasterLabelSchemas masterLabelSchemas = exportSpecification.createMasterLabelSchemas(fileSpecificLabelSchemas);
-        RewriteCommand rewriteCommand = targetConfig.createRewriteCommand(concurrencyConfig);
+
+        RewriteCommand rewriteCommand = targetConfig.createRewriteCommand(concurrencyConfig, featureToggles);
 
         return rewriteCommand.execute(masterLabelSchemas);
     }

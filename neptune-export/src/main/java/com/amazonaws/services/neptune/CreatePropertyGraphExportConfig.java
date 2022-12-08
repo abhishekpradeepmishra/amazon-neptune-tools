@@ -47,7 +47,7 @@ import java.util.Collection;
 public class CreatePropertyGraphExportConfig extends NeptuneExportCommand implements Runnable {
 
     @Inject
-    private CloneClusterModule cloneStrategy = new CloneClusterModule(awsCli);
+    private CloneClusterModule cloneStrategy = new CloneClusterModule();
 
     @Inject
     private CommonConnectionModule connection = new CommonConnectionModule(awsCli);
@@ -75,7 +75,11 @@ public class CreatePropertyGraphExportConfig extends NeptuneExportCommand implem
 
         try {
             Timer.timedActivity("creating property graph config", (CheckedActivity.Runnable) () -> {
-                try (Cluster cluster = cloneStrategy.cloneCluster(connection.config(), concurrency.config(sampling.isFullScan()), featureToggles())) {
+                try (Cluster cluster = cloneStrategy.cloneCluster(
+                        connection.clusterMetadata(),
+                        connection.config(),
+                        concurrency.config(sampling.isFullScan()),
+                        featureToggles())) {
 
                     if (sampling.isFullScan()) {
 
@@ -103,7 +107,8 @@ public class CreatePropertyGraphExportConfig extends NeptuneExportCommand implem
                                     new PropertyGraphRangeModule().config(),
                                     gremlinFilters.filters(),
                                     cluster.concurrencyConfig(),
-                                    targetConfig, featureToggles());
+                                    targetConfig, featureToggles(),
+                                    getMaxFileDescriptorCount());
 
                             graphSchema = exportJob.execute();
 
